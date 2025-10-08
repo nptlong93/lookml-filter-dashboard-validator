@@ -742,8 +742,8 @@ def main():
                 explore_data.append({
                     'Explore': explore,
                     'Total Tiles': stats['total_tiles'],
-                    'Tiles has filter': stats['tile_has_filter'],
-                    'Tiles has no filter': stats['tile_has_no_filter'],
+                    'Tile has filter': stats['tile_has_filter'],
+                    'Tile has no filter': stats['tile_has_no_filter'],
                     'Coverage %': f"{coverage_pct:.1f}%"
                 })
             
@@ -807,6 +807,12 @@ def main():
                         if viz['explore']:
                             all_explores.add(viz['explore'])
                     
+                    # Show covered explores as a list
+                    if linked_explores:
+                        st.write(f"**Covers Explores:** {', '.join(sorted(linked_explores))}")
+                    else:
+                        st.write("**Covers Explores:** None")
+                    
                     # Create charts for visualization and explore coverage
                     col_chart1, col_chart2 = st.columns(2)
                     
@@ -849,12 +855,6 @@ def main():
                             margin=dict(t=50, b=0, l=0, r=0)
                         )
                         st.plotly_chart(fig_explore, use_container_width=True)
-                    
-                    # Show covered explores as a list
-                    if linked_explores:
-                        st.write(f"**Covers Explores:** {', '.join(sorted(linked_explores))}")
-                    else:
-                        st.write("**Covers Explores:** None")
                     
                     # Visual coverage indicator
                     if filter_info['coverage_percentage'] == 100:
