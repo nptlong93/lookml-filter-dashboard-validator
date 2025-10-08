@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # Page configuration
 st.set_page_config(
-    page_title="LookML Filter Link Visualizer",
+    page_title="LookML Filter Dashboard Validator",
     page_icon="🔗",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -96,8 +96,13 @@ class LookMLAnalyzer:
                     if isinstance(elements_data, list):
                         for element_data in elements_data:
                             if element_data.get('type') not in ['text', 'single_value', 'single_number']:
+                                # Use single_value_title as fallback if title is empty
+                                title = element_data.get('title', '')
+                                if not title:
+                                    title = element_data.get('single_value_title', '')
+                                
                                 visualizations.append({
-                                    'title': element_data.get('title', ''),
+                                    'title': title,
                                     'name': element_data.get('name', ''),
                                     'type': element_data.get('type', ''),
                                     'explore': element_data.get('explore', ''),
@@ -164,8 +169,12 @@ class LookMLAnalyzer:
         self.filter_analysis = filter_analysis
         return filter_analysis
     
-    def create_pyvis_network(self, dashboard: Dict, filter_analysis: List[Dict]) -> Network:
-        """Create PyVis network visualization"""
+    def create_pyvis_network(self, dashboard: Dict, filter_analysis: List[Dict], 
+                           min_coverage: float = 0, max_links: int = 100, 
+                           layout: str = "barnesHut", show_filters: bool = True, 
+                           show_visualizations: bool = True, 
+                           min_node_size: int = 10, max_node_size: int = 50) -> Network:
+        """Create PyVis network visualization with filtering options"""
         net = Network(
             height="600px",
             width="100%",
@@ -174,11 +183,10 @@ class LookMLAnalyzer:
             directed=True
         )
         
-        # Configure physics
-        net.set_options("""
-        {
-            "physics": {
-                "enabled": true,
+        # Configure physics based on layout
+        if layout == "barnesHut":
+            physics_config = {
+                "enabled": True,
                 "stabilization": {"iterations": 100},
                 "barnesHut": {
                     "gravitationalConstant": -2000,
@@ -187,77 +195,342 @@ class LookMLAnalyzer:
                     "springConstant": 0.05,
                     "damping": 0.09
                 }
+            }
+        elif layout == "forceAtlas2Based":
+            physics_config = {
+                "enabled": True,
+                "stabilization": {"iterations": 100},
+                "forceAtlas2Based": {
+                    "gravitationalConstant": -50,
+                    "centralGravity": 0.01,
+                    "springLength": 100,
+                    "springConstant": 0.08,
+                    "damping": 0.4
+                }
+            }
+        else:  # hierarchical
+            physics_config = {
+                "enabled": True,
+                "hierarchicalRepulsion": {
+                    "centralGravity": 0.0,
+                    "springLength": 100,
+                    "springConstant": 0.01,
+                    "nodeDistance": 120,
+                    "damping": 0.09
+                }
+            }
+        
+        net.set_options(f"""
+        {{
+            "physics": {json.dumps(physics_config)},
+            "interaction": {{
+                "hover": true,
+                "tooltipDelay": 200,
+                "hideEdgesOnDrag": true,
+                "hideNodesOnDrag": false
+            }},
+            "nodes": {{
+                "font": {{
+                    "size": 12,
+                    "color": "#333333"
+                }},
+                "borderWidth": 1,
+                "borderWidthSelected": 3
+            }},
+            "edges": {{
+                "font": {{
+                    "size": 10,
+                    "color": "#666666"
+                }},
+                "smooth": {{
+                    "enabled": true,
+                    "type": "continuous"
+                }}
+            }}
+        }}
+        """)
+        
+        # Filter data based on parameters
+        filtered_analysis = [
+            f for f in filter_analysis 
+            if f['coverage_percentage'] >= min_coverage and f['link_count'] <= max_links
+        ]
+        
+        # Add filter nodes
+        if show_filters:
+            for filter_info in filtered_analysis:
+                status = filter_info['status']
+                color = filter_info['status_color']
+                
+                # Node size based on link count with scaling
+                size = min(max_node_size, max(min_node_size, filter_info['link_count'] * 2))
+                
+                net.add_node(
+                    filter_info['filter_title'],
+                    label=filter_info['filter_title'],
+                    color=color,
+                    size=size,
+                    title=f"""
+                    Filter: {filter_info['filter_title']}
+                    Type: {filter_info['filter_type']}
+                    Coverage: {filter_info['coverage_percentage']:.1f}%
+                    Links: {filter_info['link_count']}
+                    Status: {status.title()}
+                    """,
+                    group="filter"
+                )
+        
+        # Add visualization nodes
+        if show_visualizations:
+            for viz in dashboard['visualizations']:
+                filter_count = len(viz['listen'])
+                size = min(max_node_size, max(min_node_size, filter_count * 2))
+                
+                net.add_node(
+                    viz['title'],
+                    label=viz['title'],
+                    color='#2196f3',
+                    size=size,
+                    title=f"""
+                    Visualization: {viz['title']}
+                    Type: {viz['type']}
+                    Explore: {viz['explore']}
+                    Filters: {filter_count}
+                    """,
+                    group="visualization"
+                )
+        
+        # Add edges for filter-to-visualization links (only for visible nodes)
+        if show_filters and show_visualizations:
+            for viz in dashboard['visualizations']:
+                for filter_title in viz['listen'].keys():
+                    # Only add edge if both nodes are visible
+                    filter_visible = any(f['filter_title'] == filter_title for f in filtered_analysis)
+                    if filter_visible:
+                        net.add_edge(
+                            filter_title,
+                            viz['title'],
+                            color='#667eea',
+                            width=2,
+                            title=f"Filter Link: {filter_title} → {viz['title']}"
+                        )
+        
+        # Add edges for filter dependencies (only for visible filters)
+        if show_filters:
+            for filter_info in filtered_analysis:
+                for dep in filter_info['listens_to_filters']:
+                    # Only add edge if dependency filter is also visible
+                    dep_visible = any(f['filter_title'] == dep for f in filtered_analysis)
+                    if dep_visible:
+                        net.add_edge(
+                            dep,
+                            filter_info['filter_title'],
+                            color='#96ceb4',
+                            width=1,
+                            title=f"Filter Dependency: {dep} → {filter_info['filter_title']}"
+                        )
+        
+        return net
+    
+    def create_erd_network(self, dashboard: Dict, filter_analysis: List[Dict], 
+                          min_coverage: float = 0, max_links: int = 100, 
+                          show_filters: bool = True, show_visualizations: bool = True,
+                          value_name_filter: str = "") -> Network:
+        """Create proper database-style ERD with table-like entities"""
+        net = Network(
+            height="700px",
+            width="100%",
+            bgcolor="#f8f9fa",
+            font_color="#333333",
+            directed=True
+        )
+        
+        # Configure physics for proper database ERD layout
+        net.set_options("""
+        {
+            "physics": {
+                "enabled": true,
+                "stabilization": {"iterations": 500},
+                "hierarchicalRepulsion": {
+                    "centralGravity": 0.0,
+                    "springLength": 400,
+                    "springConstant": 0.001,
+                    "nodeDistance": 400,
+                    "damping": 0.1
+                }
             },
             "interaction": {
                 "hover": true,
-                "tooltipDelay": 200
+                "tooltipDelay": 300,
+                "hideEdgesOnDrag": false,
+                "hideNodesOnDrag": false,
+                "zoomView": true,
+                "dragView": true
+            },
+            "nodes": {
+                "shape": "box",
+                "font": {
+                    "size": 12,
+                    "color": "#333333",
+                    "face": "monospace"
+                },
+                "borderWidth": 3,
+                "borderWidthSelected": 5,
+                "shadow": {
+                    "enabled": true,
+                    "color": "rgba(0,0,0,0.3)",
+                    "size": 8,
+                    "x": 3,
+                    "y": 3
+                },
+                "margin": 30,
+                "widthConstraint": {
+                    "minimum": 200,
+                    "maximum": 300
+                },
+                "heightConstraint": {
+                    "minimum": 100,
+                    "maximum": 200
+                }
+            },
+            "edges": {
+                "font": {
+                    "size": 10,
+                    "color": "#444444",
+                    "face": "arial"
+                },
+                "smooth": {
+                    "enabled": true,
+                    "type": "straightCross",
+                    "roundness": 0.0
+                },
+                "arrows": {
+                    "to": {
+                        "enabled": true,
+                        "scaleFactor": 1.5,
+                        "type": "arrow"
+                    }
+                },
+                "length": 300,
+                "width": 3,
+                "color": {
+                    "color": "#666666",
+                    "highlight": "#007bff"
+                }
             }
         }
         """)
         
-        # Add filter nodes
-        for filter_info in filter_analysis:
-            status = filter_info['status']
-            color = filter_info['status_color']
-            
-            # Node size based on link count
-            size = max(20, filter_info['link_count'] * 5)
-            
-            net.add_node(
-                filter_info['filter_title'],
-                label=filter_info['filter_title'],
-                color=color,
-                size=size,
-                title=f"""
-                Filter: {filter_info['filter_title']}
-                Type: {filter_info['filter_type']}
-                Coverage: {filter_info['coverage_percentage']:.1f}%
-                Links: {filter_info['link_count']}
-                Status: {status.title()}
-                """,
-                group="filter"
-            )
+        # Filter data based on parameters
+        filtered_analysis = [
+            f for f in filter_analysis 
+            if f['coverage_percentage'] >= min_coverage and f['link_count'] <= max_links
+        ]
         
-        # Add visualization nodes
-        for viz in dashboard['visualizations']:
-            filter_count = len(viz['listen'])
-            size = max(15, filter_count * 3)
-            
-            net.add_node(
-                viz['title'],
-                label=viz['title'],
-                color='#2196f3',
-                size=size,
-                title=f"""
-                Visualization: {viz['title']}
-                Type: {viz['type']}
-                Explore: {viz['explore']}
-                Filters: {filter_count}
-                """,
-                group="visualization"
-            )
+        # Apply value name filter if provided
+        if value_name_filter:
+            filtered_analysis = [
+                f for f in filtered_analysis 
+                if value_name_filter.lower() in f['filter_title'].lower() or 
+                   value_name_filter.lower() in f.get('field', '').lower()
+            ]
         
-        # Add edges for filter-to-visualization links
-        for viz in dashboard['visualizations']:
-            for filter_title in viz['listen'].keys():
-                net.add_edge(
-                    filter_title,
-                    viz['title'],
-                    color='#667eea',
-                    width=2,
-                    title=f"Filter Link: {filter_title} → {viz['title']}"
-                )
-        
-        # Add edges for filter dependencies
-        for filter_info in filter_analysis:
-            for dep in filter_info['listens_to_filters']:
-                net.add_edge(
-                    dep,
+        # Add filter nodes as database tables
+        if show_filters:
+            for filter_info in filtered_analysis:
+                status = filter_info['status']
+                color = filter_info['status_color']
+                
+                # Create database table-style label
+                table_header = f"┌─ FILTER: {filter_info['filter_title']} ─┐"
+                table_separator = "├" + "─" * (len(table_header) - 2) + "┤"
+                table_type = f"│ Type: {filter_info['filter_type']:<20} │"
+                table_field = f"│ Field: {filter_info['field'][:20]:<20} │"
+                table_coverage = f"│ Coverage: {filter_info['coverage_percentage']:.1f}%{'':<12} │"
+                table_links = f"│ Links: {filter_info['link_count']:<22} │"
+                table_status = f"│ Status: {status.upper():<20} │"
+                table_footer = "└" + "─" * (len(table_header) - 2) + "┘"
+                
+                label = f"{table_header}\n{table_separator}\n{table_type}\n{table_field}\n{table_coverage}\n{table_links}\n{table_status}\n{table_footer}"
+                
+                net.add_node(
                     filter_info['filter_title'],
-                    color='#96ceb4',
-                    width=1,
-                    title=f"Filter Dependency: {dep} → {filter_info['filter_title']}"
+                    label=label,
+                    color=color,
+                    size=40,  # Larger for table format
+                    title=f"""
+                    Filter: {filter_info['filter_title']}
+                    Type: {filter_info['filter_type']}
+                    Field: {filter_info['field']}
+                    Coverage: {filter_info['coverage_percentage']:.1f}%
+                    Links: {filter_info['link_count']}
+                    Status: {status.title()}
+                    """,
+                    group="filter",
+                    shape="box"
                 )
+        
+        # Add visualization nodes as database tables
+        if show_visualizations:
+            for viz in dashboard['visualizations']:
+                filter_count = len(viz['listen'])
+                
+                # Create database table-style label for visualizations
+                table_header = f"┌─ VIZ: {viz['title'][:25]} ─┐"
+                table_separator = "├" + "─" * (len(table_header) - 2) + "┤"
+                table_type = f"│ Type: {viz['type']:<20} │"
+                table_explore = f"│ Explore: {viz['explore'][:18]:<18} │"
+                table_filters = f"│ Filters: {filter_count:<21} │"
+                table_position = f"│ Pos: {viz['row']},{viz['col']}{'':<23} │"
+                table_footer = "└" + "─" * (len(table_header) - 2) + "┘"
+                
+                label = f"{table_header}\n{table_separator}\n{table_type}\n{table_explore}\n{table_filters}\n{table_position}\n{table_footer}"
+                
+                net.add_node(
+                    viz['title'],
+                    label=label,
+                    color='#2196f3',
+                    size=40,  # Larger for table format
+                    title=f"""
+                    Visualization: {viz['title']}
+                    Type: {viz['type']}
+                    Explore: {viz['explore']}
+                    Filters: {filter_count}
+                    Position: Row {viz['row']}, Col {viz['col']}
+                    """,
+                    group="visualization",
+                    shape="box"
+                )
+        
+        # Add edges for filter-to-visualization links (only for visible nodes)
+        if show_filters and show_visualizations:
+            for viz in dashboard['visualizations']:
+                for filter_title in viz['listen'].keys():
+                    # Only add edge if both nodes are visible
+                    filter_visible = any(f['filter_title'] == filter_title for f in filtered_analysis)
+                    if filter_visible:
+                        net.add_edge(
+                            filter_title,
+                            viz['title'],
+                            color='#667eea',
+                            width=2,
+                            title=f"Filter Link: {filter_title} → {viz['title']}"
+                        )
+        
+        # Add edges for filter dependencies (only for visible filters)
+        if show_filters:
+            for filter_info in filtered_analysis:
+                for dep in filter_info['listens_to_filters']:
+                    # Only add edge if dependency filter is also visible
+                    dep_visible = any(f['filter_title'] == dep for f in filtered_analysis)
+                    if dep_visible:
+                        net.add_edge(
+                            dep,
+                            filter_info['filter_title'],
+                            color='#96ceb4',
+                            width=1,
+                            title=f"Filter Dependency: {dep} → {filter_info['filter_title']}"
+                        )
         
         return net
     
@@ -271,8 +544,9 @@ class LookMLAnalyzer:
         # Create horizontal bar chart
         fig = go.Figure()
         
-        # Color based on status
-        colors = [info['status_color'] for info in filter_analysis]
+        # Color based on status - need to match the sorted order
+        color_map = {info['filter_title']: info['status_color'] for info in filter_analysis}
+        colors = [color_map[title] for title in df_sorted['filter_title']]
         
         fig.add_trace(go.Bar(
             y=df_sorted['filter_title'],
@@ -322,6 +596,11 @@ def main():
     # Initialize analyzer
     if 'analyzer' not in st.session_state:
         st.session_state.analyzer = LookMLAnalyzer()
+    # Initialize required session_state keys
+    if 'current_dashboard' not in st.session_state:
+        st.session_state.current_dashboard = None
+    if 'filter_analysis' not in st.session_state:
+        st.session_state.filter_analysis = []
     
     # Header
     st.title("🔗 LookML Filter Link Visualizer")
@@ -338,8 +617,29 @@ def main():
             help="Upload a .lookml dashboard file to analyze"
         )
         
-        # Or select from existing files
-        dashboard_files = list(Path("00_LookML_Dashboards").glob("*.lookml"))
+        # Handle uploaded file
+        if uploaded_file is not None:
+            # Save uploaded file temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.lookml') as tmp_file:
+                tmp_file.write(uploaded_file.getvalue())
+                tmp_file_path = tmp_file.name
+            
+            # Load the uploaded dashboard
+            dashboard = st.session_state.analyzer.load_dashboard_file(tmp_file_path)
+            if dashboard:
+                st.success(f"✅ Loaded: {dashboard['name']}")
+                st.session_state.current_dashboard = dashboard
+                st.session_state.filter_analysis = st.session_state.analyzer.analyze_filter_links(dashboard)
+            
+            # Clean up temporary file
+            os.unlink(tmp_file_path)
+        
+        # Or select from existing files (prefer sample_dashboards if available)
+        default_dash_dir = Path("00_LookML_Dashboards")
+        sample_dash_dir = Path("sample_dashboards")
+        search_dir = sample_dash_dir if sample_dash_dir.exists() else default_dash_dir
+        dashboard_files = list(search_dir.glob("*.lookml"))
+        
         if dashboard_files:
             st.markdown("**Or select from existing files:**")
             selected_file = st.selectbox(
@@ -354,18 +654,9 @@ def main():
                     st.success(f"Loaded: {dashboard['name']}")
                     st.session_state.current_dashboard = dashboard
                     st.session_state.filter_analysis = st.session_state.analyzer.analyze_filter_links(dashboard)
+        else:
+            st.info("📁 No sample dashboard files found. Please upload a LookML file above to get started.")
         
-        # Load sample data
-        if st.button("Load Sample Data"):
-            sample_file = "00_LookML_Dashboards/pricing_filing_analysis.dashboard.lookml"
-            if Path(sample_file).exists():
-                dashboard = st.session_state.analyzer.load_dashboard_file(sample_file)
-                if dashboard:
-                    st.success(f"Loaded sample: {dashboard['name']}")
-                    st.session_state.current_dashboard = dashboard
-                    st.session_state.filter_analysis = st.session_state.analyzer.analyze_filter_links(dashboard)
-            else:
-                st.error("Sample file not found")
     
     # Main content
     if st.session_state.current_dashboard and st.session_state.filter_analysis:
@@ -376,94 +667,113 @@ def main():
         metrics = st.session_state.analyzer.create_summary_metrics(dashboard, filter_analysis)
         
         # Display metrics
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
             st.metric("Total Filters", metrics['total_filters'])
         with col2:
             st.metric("Visualizations", metrics['total_visualizations'])
         with col3:
-            st.metric("Avg Coverage", f"{metrics['avg_coverage']:.1f}%")
-        with col4:
             st.metric("Complete Links", metrics['complete_links'])
-        with col5:
+        with col4:
             st.metric("Partial Links", metrics['partial_links'])
-        with col6:
+        with col5:
             st.metric("Missing Links", metrics['missing_links'])
         
         # Tabs
-        tab1, tab2, tab3, tab4 = st.tabs(["🌐 Network Visualization", "📊 Coverage Analysis", "📋 Filter Details", "📄 Export"])
+        tab1, tab2 = st.tabs(["📊 Filter Analysis & Details", "📄 Export"])
         
         with tab1:
-            st.header("Interactive Network Visualization")
-            st.markdown("Click and drag nodes to explore filter connections")
-            
-            # Create PyVis network
-            net = st.session_state.analyzer.create_pyvis_network(dashboard, filter_analysis)
-            
-            # Save to temporary file and display
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as f:
-                net.save_graph(f.name)
-                html_file = f.name
-            
-            # Read and display
-            with open(html_file, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-            
-            st.components.v1.html(html_content, height=600)
-            
-            # Clean up
-            os.unlink(html_file)
-            
-            # Legend
-            st.markdown("""
-            **Legend:**
-            - 🟢 **Green**: Complete links (100% coverage)
-            - 🟠 **Orange**: Partial links (partial coverage)
-            - 🔴 **Red**: Missing links (0% coverage)
-            - 🔵 **Blue**: Visualizations
-            """)
-        
-        with tab2:
-            st.header("Coverage Analysis")
+            st.header("Filter Analysis & Details")
             
             # Coverage chart
             coverage_fig = st.session_state.analyzer.create_coverage_chart(filter_analysis)
             st.plotly_chart(coverage_fig, use_container_width=True)
             
-            # Status distribution
-            status_counts = pd.DataFrame(filter_analysis)['status'].value_counts()
+            st.markdown("---")
             
+            # Explore Statistics Section
+            st.subheader("📊 Explore Statistics")
+            
+            # Calculate explore statistics
+            explore_stats = {}
+            for viz in dashboard['visualizations']:
+                explore = viz['explore']
+                if explore not in explore_stats:
+                    explore_stats[explore] = {
+                        'total_tiles': 0,
+                        'tile_has_filter': 0,
+                        'tile_has_no_filter': 0,
+                        'tiles': []
+                    }
+                explore_stats[explore]['total_tiles'] += 1
+                explore_stats[explore]['tiles'].append(viz['title'])
+            
+            # Calculate linked tiles per explore (unique tiles that have at least one filter)
+            for explore, stats in explore_stats.items():
+                tile_has_filter = set()
+                for viz in dashboard['visualizations']:
+                    if viz['explore'] == explore and viz['listen']:  # Has at least one filter
+                        tile_has_filter.add(viz['title'])
+                stats['tile_has_filter'] = len(tile_has_filter)
+            
+            # Calculate unlinked tiles per explore
+            for explore, stats in explore_stats.items():
+                stats['tile_has_no_filter'] = stats['total_tiles'] - stats['tile_has_filter']
+            
+            # Display explore statistics
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("Status Distribution")
-                fig_pie = px.pie(
-                    values=status_counts.values,
-                    names=status_counts.index,
-                    color_discrete_map={
-                        'complete': '#4caf50',
-                        'partial': '#ff9800',
-                        'missing': '#ff6b6b'
-                    }
-                )
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.write(f"**Total Explores Used:** {len(explore_stats)}")
+                st.write(f"**Total Tiles:** {sum(stats['total_tiles'] for stats in explore_stats.values())}")
             
             with col2:
-                st.subheader("Coverage Statistics")
-                df = pd.DataFrame(filter_analysis)
-                
-                st.metric("Average Coverage", f"{df['coverage_percentage'].mean():.1f}%")
-                st.metric("Median Coverage", f"{df['coverage_percentage'].median():.1f}%")
-                st.metric("Min Coverage", f"{df['coverage_percentage'].min():.1f}%")
-                st.metric("Max Coverage", f"{df['coverage_percentage'].max():.1f}%")
-        
-        with tab3:
-            st.header("Filter Details")
+                # Show explore breakdown
+                for explore, stats in explore_stats.items():
+                    coverage_pct = (stats['tile_has_filter'] / stats['total_tiles'] * 100) if stats['total_tiles'] > 0 else 0
+                    st.write(f"**{explore}:** {stats['total_tiles']} tiles ({coverage_pct:.1f}% filter coverage)")
+            
+            # Detailed explore breakdown table
+            st.subheader("📋 Explore Breakdown")
+            explore_data = []
+            for explore, stats in explore_stats.items():
+                coverage_pct = (stats['tile_has_filter'] / stats['total_tiles'] * 100) if stats['total_tiles'] > 0 else 0
+                explore_data.append({
+                    'Explore': explore,
+                    'Total Tiles': stats['total_tiles'],
+                    'Tiles has filter': stats['tile_has_filter'],
+                    'Tiles has no filter': stats['tile_has_no_filter'],
+                    'Coverage %': f"{coverage_pct:.1f}%"
+                })
+            
+            if explore_data:
+                df_explore = pd.DataFrame(explore_data)
+                st.dataframe(df_explore, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Filter Details Section
+            st.subheader("🔍 Individual Filter Analysis")
+            st.markdown("Select a filter below to see detailed information about its connections and missing visualizations.")
             
             # Filter selection
             filter_options = [f['filter_title'] for f in filter_analysis]
             selected_filter = st.selectbox("Select a filter to view details:", filter_options)
+            
+            # Quick summary of all filters
+            st.markdown("---")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                complete_filters = len([f for f in filter_analysis if f['status'] == 'complete'])
+                st.metric("Complete Filters", complete_filters)
+            with col2:
+                partial_filters = len([f for f in filter_analysis if f['status'] == 'partial'])
+                st.metric("Partial Filters", partial_filters)
+            with col3:
+                missing_filters = len([f for f in filter_analysis if f['status'] == 'missing'])
+                st.metric("Missing Filters", missing_filters)
+            st.markdown("---")
             
             if selected_filter:
                 filter_info = next(f for f in filter_analysis if f['filter_title'] == selected_filter)
@@ -475,17 +785,113 @@ def main():
                     st.write(f"**Title:** {filter_info['filter_title']}")
                     st.write(f"**Type:** {filter_info['filter_type']}")
                     st.write(f"**Field:** {filter_info['field']}")
+                    
+                    # Enhanced coverage display
+                    total_viz = len(dashboard['visualizations'])
+                    linked_count = filter_info['link_count']
+                    unlinked_count = total_viz - linked_count
+                    
                     st.write(f"**Coverage:** {filter_info['coverage_percentage']:.1f}%")
                     st.write(f"**Status:** {filter_info['status'].title()}")
-                    st.write(f"**Links:** {filter_info['link_count']} visualizations")
+                    
+                    # Calculate explore coverage for this filter
+                    linked_explores = set()
+                    for viz_title in filter_info['linked_visualizations']:
+                        viz_details = next((v for v in dashboard['visualizations'] if v['title'] == viz_title), None)
+                        if viz_details and viz_details['explore']:
+                            linked_explores.add(viz_details['explore'])
+                    
+                    # Get total explores in dashboard
+                    all_explores = set()
+                    for viz in dashboard['visualizations']:
+                        if viz['explore']:
+                            all_explores.add(viz['explore'])
+                    
+                    # Create charts for visualization and explore coverage
+                    col_chart1, col_chart2 = st.columns(2)
+                    
+                    with col_chart1:
+                        # Visualization coverage pie chart
+                        viz_data = {
+                            'Linked': linked_count,
+                            'Unlinked': unlinked_count
+                        }
+                        fig_viz = go.Figure(data=[go.Pie(
+                            labels=list(viz_data.keys()),
+                            values=list(viz_data.values()),
+                            hole=0.4,
+                            marker_colors=['#4CAF50', '#FF9800']
+                        )])
+                        fig_viz.update_layout(
+                            title=f"Visualization Coverage<br><sub>{linked_count} out of {total_viz}</sub>",
+                            showlegend=True,
+                            height=300,
+                            margin=dict(t=50, b=0, l=0, r=0)
+                        )
+                        st.plotly_chart(fig_viz, use_container_width=True)
+                    
+                    with col_chart2:
+                        # Explore coverage pie chart
+                        explore_data = {
+                            'Covered': len(linked_explores),
+                            'Not Covered': len(all_explores) - len(linked_explores)
+                        }
+                        fig_explore = go.Figure(data=[go.Pie(
+                            labels=list(explore_data.keys()),
+                            values=list(explore_data.values()),
+                            hole=0.4,
+                            marker_colors=['#2196F3', '#FFC107']
+                        )])
+                        fig_explore.update_layout(
+                            title=f"Explore Coverage<br><sub>{len(linked_explores)} out of {len(all_explores)}</sub>",
+                            showlegend=True,
+                            height=300,
+                            margin=dict(t=50, b=0, l=0, r=0)
+                        )
+                        st.plotly_chart(fig_explore, use_container_width=True)
+                    
+                    # Show covered explores as a list
+                    if linked_explores:
+                        st.write(f"**Covers Explores:** {', '.join(sorted(linked_explores))}")
+                    else:
+                        st.write("**Covers Explores:** None")
+                    
+                    # Visual coverage indicator
+                    if filter_info['coverage_percentage'] == 100:
+                        st.success("🎉 Complete coverage - all visualizations linked!")
+                    elif filter_info['coverage_percentage'] > 50:
+                        st.warning(f"⚠️ Partial coverage - {unlinked_count} visualizations not applied to this filter")
+                    else:
+                        st.error(f"❌ Low coverage - {unlinked_count} visualizations not applied to this filter")
                 
                 with col2:
                     st.subheader("Linked Visualizations")
                     if filter_info['linked_visualizations']:
-                        for viz in filter_info['linked_visualizations']:
-                            st.write(f"• {viz}")
+                        for viz_title in filter_info['linked_visualizations']:
+                            # Find the visualization details to get explore info
+                            viz_details = next((v for v in dashboard['visualizations'] if v['title'] == viz_title), None)
+                            if viz_details and viz_details['explore']:
+                                st.write(f"✅ {viz_title} *({viz_details['explore']})*")
+                            else:
+                                st.write(f"✅ {viz_title}")
                     else:
                         st.write("No visualizations linked")
+                    
+                    # Show unlinked visualizations for this specific filter
+                    all_viz_titles = [viz['title'] for viz in dashboard['visualizations']]
+                    linked_viz_titles = filter_info['linked_visualizations']
+                    unlinked_viz_titles = [viz for viz in all_viz_titles if viz not in linked_viz_titles]
+                    
+                    if unlinked_viz_titles:
+                        st.subheader("❌ Unlinked Visualizations")
+                        st.write(f"*This filter is not applied to {len(unlinked_viz_titles)} out of {len(all_viz_titles)} visualizations*")
+                        for viz_title in unlinked_viz_titles:
+                            # Find the visualization details to get explore info
+                            viz_details = next((v for v in dashboard['visualizations'] if v['title'] == viz_title), None)
+                            if viz_details and viz_details['explore']:
+                                st.write(f"• {viz_title} *({viz_details['explore']})*")
+                            else:
+                                st.write(f"• {viz_title}")
                     
                     if filter_info['listens_to_filters']:
                         st.subheader("Filter Dependencies")
@@ -500,7 +906,7 @@ def main():
                 use_container_width=True
             )
         
-        with tab4:
+        with tab2:
             st.header("Export Results")
             
             # Export options
@@ -565,11 +971,48 @@ def main():
     else:
         st.info("👆 Please load a dashboard file to begin analysis")
         
-        # Show sample data info
+        # Show upload instructions
         st.markdown("""
-        ### Sample Data Available
-        The application includes sample data from your `pricing_filing_analysis.dashboard.lookml` file.
-        Click "Load Sample Data" in the sidebar to explore the analysis.
+        ### Get Started
+        
+        **Option 1: Upload a LookML File**
+        - Use the file uploader in the sidebar to upload your `.lookml` dashboard file
+        - Supported formats: `.lookml`, `.yaml`, `.yml`
+        
+        **Option 2: Use Sample Files (if available)**
+        - If sample dashboard files are available, you can select them from the dropdown in the sidebar
+        
+        **What You'll Get:**
+        - Interactive filter coverage analysis
+        - Explore statistics and breakdown
+        - Individual filter analysis with charts
+        - Export capabilities for your analysis results
+        """)
+        
+        # Show example of what the app does
+        st.markdown("""
+        ### What This App Does
+        
+        This LookML Filter Dashboard Validator helps you:
+        
+        📊 **Analyze Filter Coverage**
+        - See which visualizations are linked to each filter
+        - Identify missing filter connections
+        - Get coverage percentages and statistics
+        
+        🔍 **Explore Analysis**
+        - Understand how many explores your dashboard uses
+        - See filter coverage across different explores
+        - Identify which explores need more filter attention
+        
+        📈 **Interactive Visualizations**
+        - Pie charts showing coverage breakdown
+        - Bar charts for filter analysis
+        - Detailed individual filter insights
+        
+        📄 **Export Results**
+        - Download analysis as JSON, CSV, or Markdown
+        - Share findings with your team
         """)
 
 if __name__ == "__main__":
