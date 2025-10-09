@@ -854,13 +854,24 @@ def main():
                 with col2:
                     st.subheader("Linked Visualizations")
                     if filter_info['linked_visualizations']:
+                        # Sort linked visualizations by explore name
+                        linked_viz_with_explore = []
                         for viz_title in filter_info['linked_visualizations']:
-                            # Find the visualization details to get explore info
                             viz_details = next((v for v in dashboard['visualizations'] if v['title'] == viz_title), None)
-                            if viz_details and viz_details['explore']:
-                                st.write(f"✅ {viz_title} *({viz_details['explore']})*")
+                            if viz_details:
+                                linked_viz_with_explore.append({
+                                    'title': viz_title,
+                                    'explore': viz_details.get('explore', 'No Explore')
+                                })
+                        
+                        # Sort by explore name, then by title
+                        linked_viz_with_explore.sort(key=lambda x: (x['explore'], x['title']))
+                        
+                        for viz in linked_viz_with_explore:
+                            if viz['explore'] != 'No Explore':
+                                st.write(f"✅ {viz['title']} *({viz['explore']})*")
                             else:
-                                st.write(f"✅ {viz_title}")
+                                st.write(f"✅ {viz['title']}")
                     else:
                         st.write("No visualizations linked")
                     
@@ -872,13 +883,25 @@ def main():
                     if unlinked_viz_titles:
                         st.subheader("❌ Unlinked Visualizations")
                         st.write(f"*This filter is not applied to {len(unlinked_viz_titles)} out of {len(all_viz_titles)} visualizations*")
+                        
+                        # Sort unlinked visualizations by explore name
+                        unlinked_viz_with_explore = []
                         for viz_title in unlinked_viz_titles:
-                            # Find the visualization details to get explore info
                             viz_details = next((v for v in dashboard['visualizations'] if v['title'] == viz_title), None)
-                            if viz_details and viz_details['explore']:
-                                st.write(f"• {viz_title} *({viz_details['explore']})*")
+                            if viz_details:
+                                unlinked_viz_with_explore.append({
+                                    'title': viz_title,
+                                    'explore': viz_details.get('explore', 'No Explore')
+                                })
+                        
+                        # Sort by explore name, then by title
+                        unlinked_viz_with_explore.sort(key=lambda x: (x['explore'], x['title']))
+                        
+                        for viz in unlinked_viz_with_explore:
+                            if viz['explore'] != 'No Explore':
+                                st.write(f"• {viz['title']} *({viz['explore']})*")
                             else:
-                                st.write(f"• {viz_title}")
+                                st.write(f"• {viz['title']}")
                     
                     if filter_info['listens_to_filters']:
                         st.subheader("Filter Dependencies")
