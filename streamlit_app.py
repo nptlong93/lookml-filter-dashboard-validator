@@ -761,19 +761,6 @@ def main():
             filter_options = [f['filter_title'] for f in filter_analysis]
             selected_filter = st.selectbox("Select a filter to view details:", filter_options)
             
-            # Quick summary of all filters
-            st.markdown("---")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                complete_filters = len([f for f in filter_analysis if f['status'] == 'complete'])
-                st.metric("Complete Filters", complete_filters)
-            with col2:
-                partial_filters = len([f for f in filter_analysis if f['status'] == 'partial'])
-                st.metric("Partial Filters", partial_filters)
-            with col3:
-                missing_filters = len([f for f in filter_analysis if f['status'] == 'missing'])
-                st.metric("Missing Filters", missing_filters)
-            st.markdown("---")
             
             if selected_filter:
                 filter_info = next(f for f in filter_analysis if f['filter_title'] == selected_filter)
