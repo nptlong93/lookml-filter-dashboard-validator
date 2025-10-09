@@ -153,6 +153,25 @@ class LookMLAnalyzer:
                 status = 'missing'
                 status_color = '#ff6b6b'
             
+            # Calculate which explores this filter covers
+            covered_explores = set()
+            for viz_title in linked_viz:
+                viz_details = next((v for v in dashboard['visualizations'] if v['title'] == viz_title), None)
+                if viz_details and viz_details['explore']:
+                    covered_explores.add(viz_details['explore'])
+            
+            # Order explores by frequency of usage in dashboard, then alphabetically
+            explore_frequency = {}
+            for viz in dashboard['visualizations']:
+                if viz['explore']:
+                    explore_frequency[viz['explore']] = explore_frequency.get(viz['explore'], 0) + 1
+            
+            # Sort covered explores by frequency (descending), then alphabetically
+            sorted_covered_explores = sorted(
+                list(covered_explores), 
+                key=lambda x: (-explore_frequency.get(x, 0), x)
+            )
+            
             filter_analysis.append({
                 'filter_title': filter_def['title'],
                 'filter_type': filter_def['type'],
@@ -163,7 +182,8 @@ class LookMLAnalyzer:
                 'total_visualizations': len(dashboard['visualizations']),
                 'status': status,
                 'status_color': status_color,
-                'listens_to_filters': filter_def['listens_to_filters']
+                'listens_to_filters': filter_def['listens_to_filters'],
+                'cover_explore': sorted_covered_explores
             })
         
         self.filter_analysis = filter_analysis
@@ -911,8 +931,15 @@ def main():
             # Filter table
             st.subheader("All Filters Summary")
             df = pd.DataFrame(filter_analysis)
+            
+            # Format the cover_explore column for better display
+            df_display = df.copy()
+            df_display['cover_explore'] = df_display['cover_explore'].apply(
+                lambda x: ', '.join(x) if x else 'None'
+            )
+            
             st.dataframe(
-                df[['filter_title', 'filter_type', 'coverage_percentage', 'link_count', 'status']],
+                df_display[['filter_title', 'filter_type', 'coverage_percentage', 'link_count', 'cover_explore', 'status']],
                 use_container_width=True
             )
         
@@ -939,6 +966,10 @@ def main():
                 
                 elif export_format == "CSV":
                     df = pd.DataFrame(filter_analysis)
+                    # Format the cover_explore column for CSV export
+                    df['cover_explore'] = df['cover_explore'].apply(
+                        lambda x: ', '.join(x) if x else 'None'
+                    )
                     csv = df.to_csv(index=False)
                     st.download_button(
                         "Download CSV",
@@ -963,12 +994,14 @@ def main():
 ### Filter Details
 """
                     for filter_info in filter_analysis:
+                        cover_explore_str = ', '.join(filter_info['cover_explore']) if filter_info['cover_explore'] else 'None'
                         markdown_content += f"""
 #### {filter_info['filter_title']}
 - **Type**: {filter_info['filter_type']}
 - **Coverage**: {filter_info['coverage_percentage']:.1f}%
 - **Status**: {filter_info['status'].title()}
 - **Links**: {filter_info['link_count']} visualizations
+- **Covers Explores**: {cover_explore_str}
 """
                     
                     st.download_button(
