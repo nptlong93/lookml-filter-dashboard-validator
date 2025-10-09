@@ -930,13 +930,88 @@ def main():
             
             # Filter table
             st.subheader("All Filters Summary")
+            
+            # Add explore filter controls
+            st.markdown("**Filter by Explore:**")
+            
+            # Get all unique explores from the dashboard
+            all_explores = set()
+            for viz in dashboard['visualizations']:
+                if viz['explore']:
+                    all_explores.add(viz['explore'])
+            
+            # Sort explores alphabetically
+            sorted_explores = sorted(list(all_explores))
+            
+            col1, col2 = st.columns([1, 3])
+            
+            with col1:
+                st.markdown("**Select explores to filter:**")
+                
+                # Initialize session state for selected explores
+                if 'selected_explores' not in st.session_state:
+                    st.session_state.selected_explores = []
+                
+                # Add "Select All" / "Clear All" buttons
+                button_col1, button_col2 = st.columns(2)
+                with button_col1:
+                    if st.button("Select All", key="select_all_explores"):
+                        st.session_state.selected_explores = sorted_explores.copy()
+                        st.rerun()
+                
+                with button_col2:
+                    if st.button("Clear All", key="clear_all_explores"):
+                        st.session_state.selected_explores = []
+                        st.rerun()
+                
+                # Checkboxes for each explore
+                selected_explores = []
+                for explore in sorted_explores:
+                    is_selected = st.checkbox(
+                        explore,
+                        value=explore in st.session_state.selected_explores,
+                        key=f"explore_checkbox_{explore}"
+                    )
+                    if is_selected:
+                        selected_explores.append(explore)
+                
+                # Update session state
+                st.session_state.selected_explores = selected_explores
+            
+            with col2:
+                if selected_explores:
+                    if len(selected_explores) == 1:
+                        st.info(f"Showing filters that cover: **{selected_explores[0]}**")
+                    else:
+                        st.info(f"Showing filters that cover: **{', '.join(selected_explores)}**")
+                    st.write(f"**Selected {len(selected_explores)} explore(s)**")
+                else:
+                    st.info("Showing all filters (no explore filter applied)")
+                    st.write("**Select one or more explores to filter**")
+            
+            # Filter the data based on selected explores
             df = pd.DataFrame(filter_analysis)
             
+            if selected_explores:
+                # Filter to only show filters that cover any of the selected explores
+                filtered_df = df[df['cover_explore'].apply(
+                    lambda x: any(explore in x for explore in selected_explores) if x else False
+                )]
+            else:
+                filtered_df = df
+            
             # Format the cover_explore column for better display
-            df_display = df.copy()
+            df_display = filtered_df.copy()
             df_display['cover_explore'] = df_display['cover_explore'].apply(
                 lambda x: ', '.join(x) if x else 'None'
             )
+            
+            # Show count of filtered results
+            if selected_explores:
+                if len(selected_explores) == 1:
+                    st.write(f"**Found {len(filtered_df)} filter(s) that cover '{selected_explores[0]}'**")
+                else:
+                    st.write(f"**Found {len(filtered_df)} filter(s) that cover any of the selected explores**")
             
             st.dataframe(
                 df_display[['filter_title', 'filter_type', 'coverage_percentage', 'link_count', 'cover_explore', 'status']],
