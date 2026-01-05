@@ -1132,6 +1132,13 @@ def main():
         - Download analysis as JSON, CSV, or Markdown
         - Share findings with your team
         """)
+    
+    # Footer message
+    st.markdown("---")
+    st.markdown(
+        '<p style="text-align: center; color: #666666; font-size: 0.9em;">Designed by Pricing spoke, Peter Nguyen</p>',
+        unsafe_allow_html=True
+    )
 
 if __name__ == "__main__":
     main()
