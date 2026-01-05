@@ -1136,7 +1136,7 @@ def main():
     # Footer message
     st.markdown("---")
     st.markdown(
-        '<p style="text-align: center; color: #666666; font-size: 0.9em;">Designed by Pricing spoke, Peter Nguyen</p>',
+        '<p style="text-align: right; color: #666666; font-size: 0.9em;">Designed by Pricing spoke, Peter Nguyen</p>',
         unsafe_allow_html=True
     )
 
